@@ -1116,7 +1116,7 @@ class RedisTrib
 
         # Load nodes info before parsing options, otherwise we can't
         # handle --weight.
-        load_cluster_info_from_node(argv[0])
+        load_cluster_info_from_node(argv[0], opt['password'])
 
         # Options parsing
         threshold = opt['threshold'].to_i
@@ -1481,8 +1481,30 @@ class RedisTrib
         # a slave.
         if opt['slave']
             wait_cluster_join
-            xputs ">>> Configure node as replica of #{master}."
-            new.r.cluster("replicate",master.info[:name])
+            begin
+                max_slave_retry = Integer(opt['slave-retry'])
+            rescue
+                # default: 30
+                max_slave_retry = 30
+            end
+
+            (1..max_slave_retry).each{|i|
+                begin
+                    xputs ">>> Configure node as replica of #{master}. (try count: #{i}/#{max_slave_retry})"
+                    new.r.cluster("replicate",'12345')
+                    replicate_success = true
+                    break
+                rescue Redis::CommandError => e
+                    if not /ERR Unknown node/.match(e.message)
+                        raise e
+                    end
+                    xputs e.message
+                    sleep(1)
+                end
+            }
+            if not replicate_success
+                raise "Failed to replicate!!!"
+            end
         end
         xputs "[OK] New node added correctly."
     end
@@ -1789,7 +1811,7 @@ COMMANDS={
 
 ALLOWED_OPTIONS={
     "create" => {"replicas" => true},
-    "add-node" => {"slave" => false, "master-id" => true},
+    "add-node" => {"slave" => false, "master-id" => true, "slave-retry" => true},
     "import" => {"from" => :required, "copy" => false, "replace" => false},
     "reshard" => {"from" => true, "to" => true, "slots" => true, "yes" => false, "timeout" => true, "pipeline" => true},
     "rebalance" => {"weight" => [], "auto-weights" => false, "use-empty-masters" => false, "timeout" => true, "simulate" => false, "pipeline" => true, "threshold" => true},
